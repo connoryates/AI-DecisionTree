@@ -1,14 +1,6 @@
-# Before `make install' is performed this script should be runnable with
-# `make test'. After `make install' it should work as `perl test.pl'
+#!/usr/bin/perl
 
-#########################
-
-use Test;
-BEGIN { plan tests => 5 };
 use AI::DecisionTree;
-ok(1); # If we made it this far, we're ok.
-
-#########################
 
 my @attributes = qw(outlook  temperature  humidity  wind    play_tennis);               
 my @cases      = qw(
@@ -44,38 +36,37 @@ while (@cases) {
 $dtree->train;
 
 
-# Make sure a training example is correctly categorized
-my $result = $dtree->get_result(
-				attributes => {
-					       outlook => 'rain',
-					       temperature => 'mild',
-					       humidity => 'high',
-					       wind => 'strong',
-					      }
-			       );
-ok($result, 'no');
+my $result;
+# Try one of the training examples
+$result = $dtree->get_result( attributes => {
+					     outlook   => 'rain',
+					     temperature => 'mild',
+					     humidity => 'high',
+					     wind => 'strong',
+					    } );
+print "Result 1: $result\n";  # no
 
 # Try a new unseen example
-my $result = $dtree->get_result(
-				attributes => {
-					       outlook => 'sunny',
-					       temperature => 'hot',
-					       humidity => 'normal',
-					       wind => 'strong',
-					      }
-			       );
-ok($result, 'yes');
+$result = $dtree->get_result( attributes => {
+					     outlook => 'sunny',
+					     temperature => 'hot',
+					     humidity => 'normal',
+					     wind => 'strong',
+					    } );
+print "Result 2: $result\n";  # yes
 
-# Make sure rule_statements() works
-ok !!grep {$_ eq "if outlook='overcast' -> 'yes'"} $dtree->rule_statements;
-#print map "$_\n", $dtree->rule_statements;
 
-# Should barf on inconsistent data
+
+# Show the created tree structure as rules
+print map "$_\n", $dtree->rule_statements;
+
+
+# Will barf on inconsistent data
 my $t2 = new AI::DecisionTree;
 $t2->add_instance( attributes => { foo => 'bar' },
 		   result => 1 );
 $t2->add_instance( attributes => { foo => 'bar' },
 		   result => 0 );
 eval {$t2->train};
-ok( "$@", '/Inconsistent data/' );
+print "$@\n";
 

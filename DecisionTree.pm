@@ -1,5 +1,5 @@
 package AI::DecisionTree;
-$VERSION = 0.01;
+$VERSION = 0.02;
 
 use 5.006;
 use strict;
@@ -7,8 +7,15 @@ use Carp;
 
 sub new {
   my $package = shift;
-  return bless { nodes => 0 }, $package;
+  return bless {
+		noise_mode => 'fatal',
+		@_,
+		nodes => 0,
+	       }, $package;
 }
+
+sub nodes      { $_[0]->{nodes} }
+sub noise_mode { $_[0]->{noise_mode} }
 
 sub add_instance {
   my ($self, %args) = @_;
@@ -48,13 +55,17 @@ sub _expand_node {
     return { result => $instances[0]->{result} };
   }
 
-  croak "Inconsistent data, can't split"
-    unless grep keys %{$_->{attributes}}, @instances;
-
   my $node = {};
   
   # Multiple values are present - find the best predictor attribute and split on it
   $node->{split_on} = my $best_attr = $self->best_attr(\@instances);
+
+  croak "Inconsistent data, can't build tree with noise_mode='fatal'"
+    if $self->{noise_mode} eq 'fatal' and !defined $best_attr;
+
+  # Pick the most frequent result for this leaf
+  return { result => (sort {$results{$b} <=> $results{$a}} keys %results)[0] }
+    unless defined $best_attr;
   
   my %split;
   foreach my $i (@instances) {
@@ -67,36 +78,55 @@ sub _expand_node {
   return $node;
 }
 
-sub nodes { $_[0]->{nodes} }
-
 sub best_attr {
   my ($self, $instances) = @_;
+
+  # 0 is a perfect score, entropy(#instances) is the worst possible score
   
-  my ($best_score, $best_attr);
+  my ($best_score, $best_attr) = ($self->entropy( map $_->{result}, @$instances ), undef);
   foreach my $attr (keys %{$self->{attributes}}) {
-    next unless grep {exists $_->{attributes}{$attr}} @$instances;
 
-    my @opts = keys %{$self->{attributes}{$attr}};  # All possible values for this attribute
-
-    my $score = 0;
-    foreach my $opt (@opts) {
-      my @have_opt = grep {$_->{attributes}{$attr} eq $opt} @$instances;
-      $score += @have_opt / @$instances * $self->_entropy( map $_->{result}, @have_opt );
+    # %tallies is correlation between each attr value and result
+    # %total is number of instances with each attr value
+    my (%tallies, %totals);
+    foreach (@$instances) {
+      next unless exists $_->{attributes}{$attr};
+      $tallies{$_->{attributes}{$attr}}{$_->{result}}++;
+      $totals{$_->{attributes}{$attr}}++;
     }
+    next unless keys %totals; # Make sure at least one instance defines this attribute
     
-    ($best_attr, $best_score) = ($attr, $score) if $score <= $best_score or !defined($best_score);
+    my $score = 0;
+    while (my ($opt, $vals) = each %tallies) {
+      $score += $totals{$opt} / @$instances * $self->entropy2( $vals, $totals{$opt} )
+    }
+
+    ($best_attr, $best_score) = ($attr, $score) if $score < $best_score;
   }
+  
   return $best_attr;
 }
 
-sub _entropy {
-  my ($self, @vals) = @_;
-  my %count;
-  @count{$_}++ foreach @vals;
-  
+sub entropy2 {
+  shift;
+  my ($counts, $total) = @_;
+
+  # Entropy is defined with log base 2 - we just divide by log(2) at the end to adjust.
   my $sum = 0;
-  $sum += ($count{$_}/@vals) * log($count{$_}/@vals) / log(2)  foreach keys %count;
-  return -$sum;
+  $sum += $_ * log($_) foreach values %$counts;
+  return (log($total) - $sum/$total)/log(2);
+}
+
+sub entropy {
+  shift;
+
+  my %count;
+  $count{$_}++ foreach @_;
+
+  # Entropy is defined with log base 2 - we just divide by log(2) at the end to adjust.
+  my $sum = 0;
+  $sum += $_ * log($_) foreach values %count;
+  return (log(@_) - $sum/@_)/log(2);
 }
 
 sub get_result {
@@ -104,14 +134,30 @@ sub get_result {
   croak "Missing 'attributes' parameter" unless $args{attributes};
   
   $self->train unless $self->{tree};
+  my $tree = $self->{tree};
   
-  my $tree = $args{tree} || $self->{tree};
-  return $tree->{result} if exists $tree->{result};
+  while (1) {
+    return $tree->{result} if exists $tree->{result};
+    return undef unless exists $args{attributes}{$tree->{split_on}};
+    $tree = $tree->{children}{ $args{attributes}{$tree->{split_on}} }
+      or return undef;
+  }
+}
 
-  my $split_on = $tree->{split_on};
-  return undef unless exists $args{attributes}{$split_on};
-  my $next = $tree->{children}{ $args{attributes}{$split_on} } or return undef;
-  return $self->get_result(%args, tree => $next);
+sub rule_tree {
+  my $self = shift;
+  my ($tree) = @_ ? @_ : $self->{tree};
+  
+  # build tree:
+  # [ question, { results => [ question, { ... } ] } ]
+  
+  return $tree->{result} if exists $tree->{result};
+  
+  return [
+	  $tree->{split_on}, {
+			      map { $_ => $self->rule_tree($tree->{children}{$_}) } keys %{$tree->{children}},
+			     }
+	 ];
 }
 
 sub rule_statements {
@@ -214,22 +260,38 @@ trees.
 
 =head1 METHODS
 
-=head2 new()
+=head2 Building and Querying the Tree
 
-Creates a new decision tree object.
+=over 4
 
-=head2 add_instance()
+=item new()
+
+=item new(noise_mode => 'pick_best')
+
+Creates a new decision tree object and returns it.
+
+Accepts a parameter, C<noise_mode>, which controls the behavior of the
+C<train()> method when "noisy" data is encountered.  Here "noisy"
+means that two or more training instances contradict each other, such
+that they have identical attributes but different results.
+
+If C<noise_mode> is set to C<fatal> (the default), the C<train()>
+method will throw an exception (die).  If C<noise_mode> is set to
+C<pick_best>, the most frequent result at each noisy node will be
+selected.
+
+=item add_instance(attributes => \%hash, result => $string)
 
 Adds a training instance to the set of instances which will be used to
 form the tree.  An C<attributes> parameter specifies a hash of
 attribute-value pairs for the instance, and a C<result> parameter
 specifies the result.
 
-=head2 train()
+=item train()
 
 Builds the decision tree from the list of training instances.
 
-=head2 get_result()
+=item get_result(attributes => \%hash)
 
 Returns the most likely result (from the set of all results given to
 C<add_instance()>) for the set of attribute values given.  An
@@ -237,7 +299,42 @@ C<attributes> parameter specifies a hash of attribute-value pairs for
 the instance.  If the decision tree doesn't have enough information to
 find a result, it will return C<undef>.
 
-=head2 rule_statements()
+=back
+
+=head2 Tree Introspection
+
+=over 4
+
+=item nodes()
+
+Returns the number of nodes in the trained decision tree.
+
+=item rule_tree()
+
+Returns a data structure representing the decision tree.  For 
+instance, for the tree diagram above, the following data structure 
+is returned:
+
+ [ 'outlook', {
+     'rain' => [ 'wind', {
+         'strong' => 'no',
+         'weak' => 'yes',
+     } ],
+     'sunny' => [ 'humidity', {
+         'normal' => 'yes',
+         'high' => 'no',
+     } ],
+     'overcast' => 'yes',
+ } ]
+
+This is slightly remniscent of how XML::Parser returns the parsed 
+XML tree.
+
+Note that while the ordering in the hashes is unpredictable, the 
+nesting is in the order in which the criteria will be checked at 
+decision-making time.
+
+=item rule_statements()
 
 Returns a list of strings that describe the tree in rule-form.  For
 instance, for the tree diagram above, the following list would be
@@ -256,12 +353,16 @@ Note that while the order of the rules is unpredictable, the order of
 criteria within each rule reflects the order in which the criteria
 will be checked at decision-making time.
 
+=back
+
 =head1 LIMITATIONS
 
 A few limitations exist in the current version.  All of them could be
 removed in future versions - especially with your help. =)
 
-=head2 No continuous attributes
+=over 4
+
+=item No continuous attributes
 
 In the current implementation, only discrete-valued attributes are
 supported.  This means that an attribute like "temperature" can have
@@ -270,7 +371,7 @@ like 87 or 62.3 is not going to work.  This is because the values
 would split the data too finely - the tree-building process would
 probably think that it could make all its decisions based on the exact
 temperature value alone, ignoring all other attributes, because each
-temperature would have only been seen once.
+temperature would have only been seen once in the training data.
 
 The usual way to deal with this problem is for the tree-building
 process to figure out how to place the continuous attribute values
@@ -279,15 +380,7 @@ the tree based on these bin values.  Future versions of
 C<AI::DecisionTree> may provide support for this.  For now, you have
 to do it yourself.
 
-=head2 No support for noisy or inconsistent data
-
-Currently, the tree-building technique cannot handle inconsistent
-data.  That is, if you have two contradictory training instances, the
-C<train()> method will throw an exception.  Future versions may allow
-inconsistent data, finding the decision tree that most closely matches
-the data rather than precisely matching it.
-
-=head2 No support for tree-trimming
+=item No support for tree-trimming
 
 Most decision tree building algorithms use a two-stage building
 process - first a tree is built that completely fits the training data
@@ -306,6 +399,14 @@ This is mainly a problem when you're using "real world" or noisy data.
 If you're using data that you know to be a result of a rule-based
 process and you just want to figure out what the rules are, the
 current implementation should work fine for you.
+
+=back
+
+=head1 TO DO
+
+All the stuff in the LIMITATIONS section, plus more.  For instance, it
+would be nice to create a GraphViz (or Dot) graphical representation
+of the tree.
 
 =head1 AUTHOR
 
