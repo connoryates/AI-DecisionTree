@@ -4,7 +4,7 @@
 #########################
 
 use Test;
-BEGIN { plan tests => 4 };
+BEGIN { plan tests => 5 };
 use AI::DecisionTree;
 ok(1); # If we made it this far, we're ok.
 
@@ -43,8 +43,11 @@ while (<DATA>) {
   my $result = pop @values;
   my %pairs = map {$names[$_], $values[$_]} 0..$#names;
 
-  my $guess = $dtree->get_result(attributes => \%pairs);
-  (($guess||'') eq $result ? $good : $bad)++;
+  my ($guess, $confidence) = $dtree->get_result(attributes => \%pairs);
+  $guess ||= '';  $confidence ||= '';
+  ($guess eq $result ? $good : $bad)++;
+  
+  #print "$guess : $result : $confidence\n";
 }
 my $accuracy = $good/($good + $bad);
 ok $accuracy > .8;
@@ -53,6 +56,21 @@ print "Accuracy=$accuracy\n";
 #use YAML; print Dump($dtree->rule_tree);
 #print map "$_\n", $dtree->rule_statements;
 
+if (eval "use GraphViz; 1") {
+  my $graphviz = $dtree->as_graphviz;
+  ok $graphviz;
+
+  if (0) {
+    # Only works on Mac OS X
+    my $file = '/tmp/tree2.png';
+    open my($fh), "> $file" or die "$file: $!";
+    print $fh $graphviz->as_png;
+    close $fh;
+    system('open', $file);
+  }
+} else {
+  skip("Skipping: GraphViz is not installed", 0);
+}
 
 # The following data comes from the "C4.5" software package, in the
 # "soybean.data" data file.  It is somewhat noisy.  I chose it because

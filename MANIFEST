@@ -1,6 +1,10 @@
 Changes
 DecisionTree.pm
 INSTALL
+Instance/Instance.pm
+Instance/Makefile.PL
+Instance/t/01-basic.t
+Instance/typemap
 MANIFEST
 Makefile.PL
 README
