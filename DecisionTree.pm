@@ -4,7 +4,7 @@ use strict;
 use AI::DecisionTree::Instance;
 use Carp;
 use vars qw($VERSION @ISA);
-$VERSION = '0.06';
+$VERSION = '0.07';
 
 
 sub new {
@@ -14,6 +14,7 @@ sub new {
 		prune => 1,
 		purge => 1,
 		verbose => 0,
+		max_depth => 0,
 		@_,
 		nodes => 0,
 		instances => [],
@@ -23,6 +24,7 @@ sub new {
 
 sub nodes      { $_[0]->{nodes} }
 sub noise_mode { $_[0]->{noise_mode} }
+sub depth      { $_[0]->{depth} }
 
 sub add_instance {
   my ($self, %args) = @_;
@@ -60,11 +62,16 @@ sub _create_lookup_hashes {
 }
 
 sub train {
-  my ($self) = @_;
-  croak "Cannot train the same tree twice" if $self->{tree};
-  croak "Must add training instances before calling train()" unless @{ $self->{instances} };
-
+  my ($self, %args) = @_;
+  if (not @{ $self->{instances} }) {
+    croak "Training data has been purged, can't re-train" if $self->{tree};
+    croak "Must add training instances before calling train()";
+  }
+  
   $self->_create_lookup_hashes;
+  local $self->{curr_depth} = 0;
+  local $self->{max_depth} = $args{max_depth} if exists $args{max_depth};
+  $self->{depth} = 0;
   $self->{tree} = $self->_expand_node( instances => $self->{instances} );
 
   $self->prune_tree if $self->{prune};
@@ -119,6 +126,8 @@ sub _expand_node {
   my $instances = $args{instances};
   print STDERR '.' if $self->{verbose};
   
+  $self->{depth} = $self->{curr_depth} if $self->{curr_depth} > $self->{depth};
+  local $self->{curr_depth} = $self->{curr_depth} + 1;
   $self->{nodes}++;
 
   my %results;
@@ -131,7 +140,6 @@ sub _expand_node {
     $node{result} = $self->_result($instances->[0]);
     return \%node;
   }
-
   
   # Multiple values are present - find the best predictor attribute and split on it
   my $best_attr = $self->best_attr($instances);
@@ -139,7 +147,8 @@ sub _expand_node {
   croak "Inconsistent data, can't build tree with noise_mode='fatal'"
     if $self->{noise_mode} eq 'fatal' and !defined $best_attr;
 
-  unless (defined $best_attr) {
+  if ( !defined($best_attr)
+       or $self->{max_depth} && $self->{curr_depth} > $self->{max_depth} ) {
     # Pick the most frequent result for this leaf
     $node{result} = (sort {$results{$b} <=> $results{$a}} keys %results)[0];
     return \%node;
@@ -317,17 +326,26 @@ sub get_result {
 sub as_graphviz {
   my $self = shift;
   require GraphViz;
-  my $g = new GraphViz;
+  my $g = GraphViz->new(@_);
 
   my $id = 1;
   my $add_edge = sub {
     my ($self, $node, $parent, $node_name) = @_;
     # We use stringified reference names for node names, as a convenient hack.
 
-    $g->add_node( "$node",
-		  label => $node->{split_on} || $node->{result},
-		  shape => ($node->{split_on} ? 'ellipse' : 'box'),
-		);
+    if ($node->{split_on}) {
+      $g->add_node( "$node",
+		    label => $node->{split_on},
+		    shape => 'ellipse',
+		  );
+    } else {
+      my $i = 0;
+      my $distr = join ',', grep {$i++ % 2} @{$node->{distribution}};
+      $g->add_node( "$node",
+		    label => "$node->{result} ($distr)",
+		    shape => 'box',
+		  );
+    }
     $g->add_edge( "$parent" => "$node",
 		  label => $node_name,
 		) if $parent;
@@ -519,6 +537,12 @@ training a decision tree.  Default is false.
 If set to a true value, the C<do_purge()> method will be invoked
 during C<train()>.  The default is true.
 
+=item max_depth
+
+Controls the maximum depth of the tree that will be created during
+C<train()>.  The default is 0, which means that trees of unlimited
+depth can be constructed.
+
 =back
 
 =item add_instance(attributes => \%hash, result => $string, name => $string)
@@ -534,7 +558,9 @@ C<set_results()> method below.
 
 =item train()
 
-Builds the decision tree from the list of training instances.
+Builds the decision tree from the list of training instances.  If a
+numeric C<max_depth> parameter is supplied, the maximum tree depth can
+be controlled (see also the C<new()> method).
 
 =item get_result(attributes => \%hash)
 
@@ -585,6 +611,13 @@ build this tree.
 
 Returns the number of nodes in the trained decision tree.
 
+=item depth()
+
+Returns the depth of the tree.  This is the maximum number of
+decisions that would need to be made to classify an unseen instance,
+i.e. the length of the longest path from the tree's root to a leaf.  A
+tree with a single node would have a depth of zero.
+
 =item rule_tree()
 
 Returns a data structure representing the decision tree.  For 
@@ -628,6 +661,16 @@ This can be helpful for scrutinizing the structure of a tree.
 Note that while the order of the rules is unpredictable, the order of
 criteria within each rule reflects the order in which the criteria
 will be checked at decision-making time.
+
+=item as_graphviz()
+
+Returns a C<GraphViz> object representing the tree.  Requires that the
+GraphViz module is already installed, of course.  The object returned
+will allow you to create PNGs, GIFs, image maps, or whatever graphical
+representation of your tree you might want.  Any arguments given to
+C<as_graphviz()> will be passed on to GraphViz's C<new()> method.
+
+See the L<GraphViz> docs for more info.
 
 =back
 
@@ -674,6 +717,6 @@ Mitchell, Tom (1997).  Machine Learning.  McGraw-Hill. pp 52-80.
 Quinlan, J. R. (1986).  Induction of decision trees.  Machine
 Learning, 1(1), pp 81-106.
 
-L<perl>.
+L<perl>, L<GraphViz>
 
 =cut

@@ -4,7 +4,7 @@
 #########################
 
 use Test;
-BEGIN { plan tests => 16 };
+BEGIN { plan tests => 30 };
 use AI::DecisionTree;
 ok(1); # If we made it this far, we're ok.
 
@@ -30,7 +30,7 @@ my @cases      = qw(
 my $outcome = pop @attributes;
 
 
-my $dtree = new AI::DecisionTree;
+my $dtree = new AI::DecisionTree(purge => 0);
 while (@cases) {
   my @values = splice @cases, 0, 1 + scalar(@attributes);
   my $result = pop @values;
@@ -67,7 +67,11 @@ $result = $dtree->get_result(
 ok($result, 'yes');
 
 # Make sure rule_statements() works
-ok !!grep {$_ eq "if outlook='overcast' -> 'yes'"} $dtree->rule_statements;
+{
+  my @rules = $dtree->rule_statements;
+  ok @rules, 5;
+  ok !!grep {$_ eq "if outlook='overcast' -> 'yes'"} @rules;
+}
 
 # Make sure rule_tree() works
 ok $dtree->rule_tree->[0], 'outlook';
@@ -106,14 +110,24 @@ if (eval "use GraphViz; 1") {
 # Make sure there are 8 nodes
 ok $dtree->nodes, 8;
 
-# Should barf on inconsistent data
-my $t2 = new AI::DecisionTree;
-$t2->add_instance( attributes => { foo => 'bar' },
-		   result => 1 );
-$t2->add_instance( attributes => { foo => 'bar' },
-		   result => 0 );
-eval {$t2->train};
-ok( "$@", '/Inconsistent data/' );
+{
+  # Test max_depth
+  $dtree->train(max_depth => 1);
+  my @rules = $dtree->rule_statements;
+  ok @rules, 3;
+  ok $dtree->depth, 1;
+}
+
+{
+  # Should barf on inconsistent data
+  my $t2 = new AI::DecisionTree;
+  $t2->add_instance( attributes => { foo => 'bar' },
+		     result => 1 );
+  $t2->add_instance( attributes => { foo => 'bar' },
+		     result => 0 );
+  eval {$t2->train};
+  ok( "$@", '/Inconsistent data/' );
+}
 
 {
   # Make sure two trees can be trained concurrently
@@ -152,4 +166,31 @@ ok( "$@", '/Inconsistent data/' );
     ok $result, 0+($doc->[0] eq 'vampire');
   }
 
+}
+
+{
+  my $t1 = new AI::DecisionTree(purge => 0);
+  my $t2 = new AI::DecisionTree;
+  $t1->add_instance( attributes => { foo => 'bar' },
+		     result => 1, name => 1 );
+  $t1->add_instance( attributes => { foo => 'baz' },
+		     result => 0, name => 2 );
+
+  eval {$t1->train};
+  ok !$@;
+
+  ok $t1->instances->[0]->name, 1;
+  ok $t1->instances->[1]->name, 2;
+  ok $t1->_result($t1->instances->[0]), 1;  # Not a public interface
+  ok $t1->_result($t1->instances->[1]), 0;  # Not a public interface
+
+  $t2->copy_instances(from => $t1);
+  ok $t2->instances->[0]->name, 1;
+  ok $t2->instances->[1]->name, 2;
+  ok $t2->_result($t2->instances->[0]), 1;  # Not a public interface
+  ok $t2->_result($t2->instances->[1]), 0;  # Not a public interface
+
+  $t2->set_results( {1=>0, 2=>1} );
+  ok $t2->_result($t2->instances->[0]), 0;  # Not a public interface
+  ok $t2->_result($t2->instances->[1]), 1;  # Not a public interface
 }
