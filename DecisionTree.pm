@@ -1,10 +1,16 @@
 package AI::DecisionTree;
-$VERSION = '0.03';
+BEGIN {
+  $VERSION = '0.04';
+  @ISA = qw(DynaLoader);
+}
 
-use 5.006;
 use strict;
 use Carp;
 use AI::DecisionTree::Instance;
+use DynaLoader ();
+use vars qw($VERSION @ISA);
+
+bootstrap AI::DecisionTree $VERSION;
 
 sub new {
   my $package = shift;
@@ -96,7 +102,7 @@ sub _expand_node {
 
 sub best_attr {
   my ($self, $instances) = @_;
-print STDERR '.';
+
   # 0 is a perfect score, entropy(#instances) is the worst possible score
   
   my ($best_score, $best_attr) = (@$instances * $self->entropy( map $_->result_int, @$instances ), undef);
@@ -105,13 +111,8 @@ print STDERR '.';
 
     # %tallies is correlation between each attr value and result
     # %total is number of instances with each attr value
-    my (%tallies, %totals);
-    foreach (@$instances) {
-      my $v = $_->value_int($all_attr->{$attr});
-      next unless $v;
-      $tallies{ $v }{ $_->result_int }++;
-      $totals{ $v }++;
-    }
+    my (%totals, %tallies);
+    $self->_tally($instances, \%tallies, \%totals, $all_attr->{$attr});
     next unless keys %totals; # Make sure at least one instance defines this attribute
     
     my $score = 0;
@@ -510,33 +511,12 @@ the tree based on these bin values.  Future versions of
 C<AI::DecisionTree> may provide support for this.  For now, you have
 to do it yourself.
 
-=item No support for tree-trimming
-
-Most decision tree building algorithms use a two-stage building
-process - first a tree is built that completely fits the training data
-(or fits it as closely as possible if noisy data is supported), and
-then the tree is pruned so that it will generalize well to new
-instances.  This might be done either by maximizing performance on a
-set of held-out training instances, or by pruning parts of the tree
-that don't seem like they'll be very valuable.
-
-Currently, we build a tree that completely fits the training data, and
-we don't prune it.  That means that the tree may B<overfit> the
-training data in many cases - i.e., you won't be able to see the
-forest for the trees (or, more accurately, the tree for the leaves).
-
-This is mainly a problem when you're using "real world" or noisy data.
-If you're using data that you know to be a result of a rule-based
-process and you just want to figure out what the rules are, the
-current implementation should work fine for you.
-
 =back
 
 =head1 TO DO
 
-All the stuff in the LIMITATIONS section, plus more.  For instance, it
-would be nice to create a GraphViz (or Dot) graphical representation
-of the tree.
+All the stuff in the LIMITATIONS section.  Also, revisit the pruning
+algorithm to see how it can be improved.
 
 =head1 AUTHOR
 
