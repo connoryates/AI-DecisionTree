@@ -4,7 +4,7 @@
 #########################
 
 use Test;
-BEGIN { plan tests => 11 };
+BEGIN { plan tests => 16 };
 use AI::DecisionTree;
 ok(1); # If we made it this far, we're ok.
 
@@ -115,3 +115,41 @@ $t2->add_instance( attributes => { foo => 'bar' },
 eval {$t2->train};
 ok( "$@", '/Inconsistent data/' );
 
+{
+  # Make sure two trees can be trained concurrently
+  my $t1 = new AI::DecisionTree;
+  my $t2 = new AI::DecisionTree;
+  
+  my @train = (
+	       [farming => 'sheep very valuable farming'],
+	       [farming => 'farming requires many kinds animals'],
+	       [vampire => 'vampires drink blood vampires may staked'],
+	       [vampire => 'vampires cannot see their images mirrors'],
+	      );
+  foreach my $doc (@train) {
+    $t1->add_instance( attributes => {map {$_,1} split ' ', $doc->[1]},
+		       result => 0+($doc->[0] eq 'farming'));
+  }
+  foreach my $doc (@train) {
+    $t2->add_instance( attributes => {map {$_,1} split ' ', $doc->[1]},
+		       result => 0+($doc->[0] eq 'vampire'));
+  }
+  
+  $t1->train;
+  $t2->train;
+  ok(1);
+
+  my @test = (
+	      [farming => 'I would like to begin farming sheep'],
+	      [vampire => "I see that many vampires may have eaten my beautiful daughter's blood"],
+	     );
+
+  foreach my $doc (@test) {
+    my $result = $t1->get_result( attributes => {map {$_,1} split ' ', $doc->[1]} );
+    ok $result, 0+($doc->[0] eq 'farming');
+
+    $result = $t2->get_result( attributes => {map {$_,1} split ' ', $doc->[1]} );
+    ok $result, 0+($doc->[0] eq 'vampire');
+  }
+
+}

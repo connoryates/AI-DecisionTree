@@ -1,16 +1,14 @@
 package AI::DecisionTree;
 BEGIN {
-  $VERSION = '0.04';
+  $VERSION = '0.05';
   @ISA = qw(DynaLoader);
 }
 
 use strict;
-use Carp;
 use AI::DecisionTree::Instance;
-use DynaLoader ();
+use Carp;
 use vars qw($VERSION @ISA);
 
-bootstrap AI::DecisionTree $VERSION;
 
 sub new {
   my $package = shift;
@@ -31,20 +29,42 @@ sub add_instance {
   croak "Missing 'attributes' parameter" unless $args{attributes};
   croak "Missing 'result' parameter" unless defined $args{result};
   
-  $self->{attributes}{$_}{$args{attributes}{$_}} = 1 foreach keys %{$args{attributes}};
-  push @{$self->{instances}}, AI::DecisionTree::Instance->new($args{attributes}, $args{result});
-  $self->{results}{ $args{result} } = 1;
+  my @attributes;
+  while (my ($k, $v) = each %{$args{attributes}}) {
+    $attributes[ _hlookup($self->{attributes}, $k) ] = _hlookup($self->{attribute_values}{$k}, $v);
+  }
+  $_ ||= 0 foreach @attributes;
+  
+  push @{$self->{instances}}, AI::DecisionTree::Instance->new(\@attributes, _hlookup($self->{results}, $args{result}));
+}
+
+sub _hlookup {
+  $_[0] ||= {}; # Autovivify as a hash
+  my ($hash, $key) = @_;
+  unless (exists $hash->{$key}) {
+    $hash->{$key} = 1 + keys %$hash;
+  }
+  return $hash->{$key};
 }
 
 sub train {
   my ($self) = @_;
   croak "Cannot train the same tree twice" if $self->{tree};
   croak "Must add training instances before calling train()" unless @{ $self->{instances} };
+
+  my $h = $self->{results};
+  $self->{results_reverse} = [ undef, sort {$h->{$a} <=> $h->{$b}} keys %$h ];
   
+  foreach my $attr (keys %{$self->{attribute_values}}) {
+    my $h = $self->{attribute_values}{$attr};
+    $self->{attribute_values_reverse}{$attr} = [ undef, sort {$h->{$a} <=> $h->{$b}} keys %$h ];
+  }
+
   $self->{tree} = $self->_expand_node( instances => $self->{instances} );
   delete $self->{instances};
 
   $self->prune_tree if $self->{prune};
+  delete @{$self}{qw(attribute_values attribute_values_reverse results results_reverse)};
   return 1;
 }
 
@@ -63,13 +83,13 @@ sub _expand_node {
   $self->{nodes}++;
 
   my %results;
-  $results{$_->result}++ foreach @$instances;
+  $results{$self->_result($_)}++ foreach @$instances;
   my @results = map {$_,$results{$_}} sort {$results{$b} <=> $results{$a}} keys %results;
   my %node = ( distribution => \@results, instances => scalar @$instances );
 
   if (keys(%results) == 1) {
     # All these instances have the same result - make this node a leaf
-    $node{result} = $instances->[0]->result;
+    $node{result} = $self->_result($instances->[0]);
     return \%node;
   }
 
@@ -90,11 +110,15 @@ sub _expand_node {
   
   my %split;
   foreach my $i (@$instances) {
-    push @{$split{ $i->delete_value($best_attr) }}, $i;
+    my $v = $self->_delete_value($i, $best_attr);
+    push @{$split{ defined($v) ? $v : '<undef>' }}, $i;
   }
+  die ("Something's wrong: attribute '$best_attr' didn't split ",
+       scalar @$instances, " instances into multiple buckets (@{[ keys %split ]})")
+    unless keys %split > 1;
 
-  foreach my $opt (keys %split) {
-    $node{children}{$opt} = $self->_expand_node( instances => $split{$opt} );
+  foreach my $value (keys %split) {
+    $node{children}{$value} = $self->_expand_node( instances => $split{$value} );
   }
   
   return \%node;
@@ -106,18 +130,18 @@ sub best_attr {
   # 0 is a perfect score, entropy(#instances) is the worst possible score
   
   my ($best_score, $best_attr) = (@$instances * $self->entropy( map $_->result_int, @$instances ), undef);
-  my $all_attr = AI::DecisionTree::Instance->all_attributes;
+  my $all_attr = $self->{attributes};
   foreach my $attr (keys %$all_attr) {
 
     # %tallies is correlation between each attr value and result
     # %total is number of instances with each attr value
     my (%totals, %tallies);
-    $self->_tally($instances, \%tallies, \%totals, $all_attr->{$attr});
+    my $num_undef = AI::DecisionTree::Instance::->tally($instances, \%tallies, \%totals, $all_attr->{$attr});
     next unless keys %totals; # Make sure at least one instance defines this attribute
     
     my $score = 0;
     while (my ($opt, $vals) = each %tallies) {
-      $score += $totals{$opt} * $self->entropy2( $vals, $totals{$opt} )
+      $score += $totals{$opt} * $self->entropy2( $vals, $totals{$opt} );
     }
 
     ($best_attr, $best_score) = ($attr, $score) if $score < $best_score;
@@ -133,7 +157,7 @@ sub entropy2 {
   # Entropy is defined with log base 2 - we just divide by log(2) at the end to adjust.
   my $sum = 0;
   $sum += $_ * log($_) foreach values %$counts;
-  return (log($total) - $sum/$total)/log(2);
+  return +(log($total) - $sum/$total)/log(2);
 }
 
 sub entropy {
@@ -145,7 +169,7 @@ sub entropy {
   # Entropy is defined with log base 2 - we just divide by log(2) at the end to adjust.
   my $sum = 0;
   $sum += $_ * log($_) foreach values %count;
-  return (log(@_) - $sum/@_)/log(2);
+  return +(log(@_) - $sum/@_)/log(2);
 }
 
 sub prune_tree {
@@ -231,7 +255,8 @@ sub _traverse {
 sub get_result {
   my ($self, %args) = @_;
   croak "Missing 'attributes' parameter" unless $args{attributes};
-  
+  my $a = $args{attributes};
+
   $self->train unless $self->{tree};
   my $tree = $self->{tree};
   my $count = 0;
@@ -244,8 +269,8 @@ sub get_result {
     }
     $count++;
 
-    return undef unless exists $args{attributes}{$tree->{split_on}};
-    $tree = $tree->{children}{ $args{attributes}{$tree->{split_on}} }
+    my $instance_val = exists $a->{$tree->{split_on}} ? $a->{$tree->{split_on}} : '<undef>';
+    $tree = $tree->{children}{ $instance_val }
       or return undef;
   }
 }
@@ -300,6 +325,30 @@ sub rule_statements {
     push @out, $self->rule_statements("$prefix $tree->{split_on}='$val'", $tree->{children}{$val});
   }
   return @out;
+}
+
+### Some instance accessor stuff:
+
+sub _result {
+  my ($self, $instance) = @_;
+  my $int = $instance->result_int;
+  return $self->{results_reverse}[$int];
+}
+
+sub _delete_value {
+  my ($self, $instance, $attr) = @_;
+  my $val = $self->_value($instance, $attr);
+  return unless defined $val;
+  
+  $instance->set_value($self->{attributes}{$attr}, 0);
+  return $val;
+}
+
+sub _value {
+  my ($self, $instance, $attr) = @_;
+  return unless exists $self->{attributes}{$attr};
+  my $val_int = $instance->value_int($self->{attributes}{$attr});
+  return $self->{attribute_values_reverse}{$attr}[$val_int];
 }
 
 
@@ -410,6 +459,11 @@ If C<noise_mode> is set to C<fatal> (the default), the C<train()>
 method will throw an exception (die).  If C<noise_mode> is set to
 C<pick_best>, the most frequent result at each noisy node will be
 selected.
+
+C<new()> also accepts a boolean C<prune> parameter which specifies
+whether the tree should be pruned after training.  This is usually a
+good idea, so the default is to prune.  Currently we prune using a
+simple minimum-description-length criterion.
 
 =item add_instance(attributes => \%hash, result => $string)
 
