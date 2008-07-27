@@ -13,3 +13,4 @@ README
 eg/example.pl
 t/01-simple.t
 t/02-noisy.t
+META.yml                                 Module meta-data (added by MakeMaker)
