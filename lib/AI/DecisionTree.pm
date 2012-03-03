@@ -1,10 +1,13 @@
-package AI::DecisionTree;
-
 use strict;
+
+package AI::DecisionTree;
+{
+  $AI::DecisionTree::VERSION = '0.11';
+}
+
 use AI::DecisionTree::Instance;
 use Carp;
-use vars qw($VERSION @ISA);
-$VERSION = '0.09';
+use vars qw(@ISA);
 
 
 sub new {
@@ -331,6 +334,7 @@ sub get_result {
     my $instance_val = (exists $args{callback} ? $args{callback}->($tree->{split_on}) :
 			exists $args{attributes}{$tree->{split_on}} ? $args{attributes}{$tree->{split_on}} :
 			'<undef>');
+    ## no critic (ProhibitExplicitReturnUndef)
     $tree = $tree->{children}{ $instance_val }
       or return undef;
   }
@@ -436,6 +440,10 @@ __END__
 =head1 NAME
 
 AI::DecisionTree - Automatically Learns Decision Trees
+
+=head1 VERSION
+
+version 0.11
 
 =head1 SYNOPSIS
 
@@ -689,7 +697,7 @@ GraphViz module is already installed, of course.  The object returned
 will allow you to create PNGs, GIFs, image maps, or whatever graphical
 representation of your tree you might want.  
 
-A C<leaf_color> argument can specify a fill color for each leaf node
+A C<leaf_colors> argument can specify a fill color for each leaf node
 in the tree.  The keys of the hash should be the same as the strings
 appearing as the C<result> parameters given to C<add_instance()>, and
 the values should be any GraphViz-style color specification.
